@@ -252,6 +252,8 @@ void __fastcall InsertInLists_h(void* w, void* vob) {
 // =====================================================================================================
 struct RBuf {
   bool active = false, lastFillShort = false;
+  int seqSmall = 0;            // consecutive small sequential reads seen while not buffering
+  long fillSize = 0;           // grows 4 KB -> 64 KB while the data keeps being consumed sequentially
   long base = 0;               // logical file position of data[0]
   long len = 0, off = 0;
   std::vector<char> data;
@@ -260,7 +262,7 @@ static SRWLOCK g_rbLock = SRWLOCK_INIT;
 static std::unordered_map<void*, RBuf*> g_rb;
 static thread_local void* t_rbFile = nullptr;
 static thread_local RBuf* t_rbBuf = nullptr;
-static const long kRBuf = 64 * 1024, kRSmall = 4096;
+static const long kRBuf = 64 * 1024, kRSmall = 4096, kRFirst = 4096, kRStartAfter = 4;
 
 static RBuf* RB(void* f, bool create) {
   if (t_rbFile == f) return t_rbBuf;
@@ -281,7 +283,7 @@ auto Hook_VSeek = HOOK(0x00445400, &VSeek_h);
 long __fastcall VPos_h(void*, void*);
 auto Hook_VPos = HOOK(0x00445720, &VPos_h);
 
-static void RDrop(RBuf* b) { b->active = false; b->len = b->off = 0; b->lastFillShort = false; }
+static void RDrop(RBuf* b) { b->active = false; b->len = b->off = 0; b->lastFillShort = false; b->seqSmall = 0; b->fillSize = kRFirst; }
 static void RSync(void* f) {
   RBuf* b = RB(f, false);
   if (!b || !b->active) return;
@@ -303,19 +305,23 @@ long __fastcall VRead_h(void* f, void* edx, void* dst, long n) {
   }
   RBuf* b = RB(f, true);
   if (!b->active) {
+    // Only start buffering after a few small sequential reads: patterns like "read a header, seek
+    // elsewhere" (script symbols at startup) would otherwise read whole blocks for nothing.
+    if (++b->seqSmall < kRStartAfter) return Hook_VRead(f, edx, dst, n);
     b->base = Hook_VPos(f, nullptr);
-    b->len = b->off = 0; b->lastFillShort = false; b->active = true;
+    b->len = b->off = 0; b->lastFillShort = false; b->active = true; b->fillSize = kRFirst;
     if (b->data.size() != (size_t)kRBuf) b->data.resize(kRBuf);
   }
   long done = 0;
   while (done < n) {
     if (b->off >= b->len) {
       if (b->lastFillShort) break;                      // real end of file reached
+      if (b->len) b->fillSize = b->fillSize * 2 > kRBuf ? kRBuf : b->fillSize * 2;   // previous block fully used
       b->base += b->len; b->off = 0;
-      long r = Hook_VRead(f, edx, b->data.data(), kRBuf);
+      long r = Hook_VRead(f, edx, b->data.data(), b->fillSize);
       S.readFills++;
       if (r < 0) { RDrop(b); return done ? done : r; }
-      b->len = r; b->lastFillShort = r < kRBuf;
+      b->len = r; b->lastFillShort = r < b->fillSize;
       if (r == 0) break;
     }
     long take = b->len - b->off;

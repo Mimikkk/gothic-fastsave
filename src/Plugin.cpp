@@ -33,13 +33,13 @@ static int  g_sessionKind = 0;       // 1 = load, 2 = save
 bool g_optOn[OPT_COUNT] = {};
 const char* const g_optKeys[OPT_COUNT] = { "FastWaypoints", "FastAniInit", "FastWorldLists", "FastFileRead", "FastStringMap", "FastFileWrite" };
 static int g_optMode[OPT_COUNT] = { 1, 1, 1, 1, 1, 1 };
-static int g_abCounter = 0;
+static int g_abCounter[3] = {};   // per session kind, so alternating F10/F12 still gives A/B pairs
 bool IsMainThread() { return GetCurrentThreadId() == g_mainThread; }
 bool InSession() { return g_session; }
 bool InLoadSession() { return g_session && g_sessionKind == 1; }
 bool InSaveSession() { return g_session && g_sessionKind == 2; }
 static std::string ApplyOptModes() {   // resolves A/B (mode 2) for this session
-  bool abOn = (g_abCounter++ % 2) == 1;
+  bool abOn = (g_abCounter[g_sessionKind]++ % 2) == 1;
   std::string ab;
   for (int i = 0; i < OPT_COUNT; i++) {
     g_optOn[i] = g_optMode[i] == 1 || (g_optMode[i] == 2 && abOn);

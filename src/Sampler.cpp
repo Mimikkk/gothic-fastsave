@@ -198,7 +198,7 @@ void End(const char* label) {
 
   char path[MAX_PATH];
   sprintf(path, "%s\\%03d_%s.txt", g_outDir.c_str(), ++g_seq, label);
-  for (char* p = path + g_outDir.size() + 1; *p; p++) if (*p == ' ' || *p == ':' || *p == '[' || *p == ']' || *p == '=') *p = '_';
+  for (char* p = path + g_outDir.size() + 1; *p; p++) if (strchr(" :[]=*?\"<>|/\\", *p)) *p = '_';
   FILE* out = fopen(path, "w");
   if (!out) return;
   fprintf(out, "# label %s\n# wall_ms %.1f\n# samples %u failed %u\n", label, wallMs, g_total, g_failed);

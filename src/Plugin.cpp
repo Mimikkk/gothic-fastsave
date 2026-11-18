@@ -32,9 +32,9 @@ static int  g_sessionKind = 0;       // 1 = load, 2 = save
 
 // ---------------------------------------------------------------- optimization switches (Common.h)
 bool g_optOn[OPT_COUNT] = {};
-const char* const g_optKeys[OPT_COUNT] = { "FastWaypoints", "FastAniInit", "FastWorldLists", "FastFileRead", "FastStringMap", "FastFileWrite", "FastListHints", "FastSkipRemove" };
-static int g_optMode[OPT_COUNT] = { 1, 1, 1, 1, 1, 1, 0, 0 };
-static const int g_optDefault[OPT_COUNT] = { 1, 1, 1, 1, 1, 1, 0, 0 };   // experimental ones default off
+const char* const g_optKeys[OPT_COUNT] = { "FastWaypoints", "FastAniInit", "FastWorldLists", "FastFileRead", "FastStringMap", "FastFileWrite", "FastListHints", "FastSkipRemove", "FastLineRead" };
+static int g_optMode[OPT_COUNT] = { 1, 1, 1, 1, 1, 1, 0, 0, 0 };
+static const int g_optDefault[OPT_COUNT] = { 1, 1, 1, 1, 1, 1, 0, 0, 0 };   // experimental ones default off
 static int g_abCounter[3] = {};   // per session kind, so alternating F10/F12 still gives A/B pairs
 bool IsMainThread() { return GetCurrentThreadId() == g_mainThread; }
 bool InSession() { return g_session; }

@@ -452,7 +452,7 @@ void __fastcall RestoreStringEOL_h(void*, zSTRING*);
 auto Hook_RestoreStringEOL = HOOK(0x00514750, &RestoreStringEOL_h);
 void __fastcall RestoreStringEOL_h(void* arc, zSTRING* str) {
   void* file = *(void**)((char*)arc + 0x2C);
-  if (!g_optOn[OPT_FileRead] || !IsMainThread() || *(int*)((char*)arc + 0x3C) != 0 || *(int*)((char*)arc + 0x24) != 0 || !file) {
+  if (!g_optOn[OPT_FileRead] || !g_optOn[OPT_LineRead] || !IsMainThread() || *(int*)((char*)arc + 0x3C) != 0 || *(int*)((char*)arc + 0x24) != 0 || !file) {
     Hook_RestoreStringEOL(arc, str);
     return;
   }

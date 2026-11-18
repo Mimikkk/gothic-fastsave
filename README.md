@@ -28,6 +28,7 @@ Zachowanie każdej podmienionej funkcji zostało odczytane z disassemblera `Goth
 | `FastStringMap` | `GETStringMap` (BinSafe) | Tablica haszująca ma na sztywno 97 kubełków, więc łańcuchy mają po kilkaset elementów | Pomocniczy indeks obok oryginalnej tablicy. Numery kubełków trafiają do pliku zapisu, więc samej tablicy **nie** powiększamy. |
 | `FastFileWrite` | `zFILE_FILE::Write` | 2 mln małych zapisów `fwrite` przy zapisie gry | Bufor zapisu 64 KB (tylko podczas zapisu gry) |
 | `FastListHints` *(eksperymentalne, domyślnie 0)* | `zCListSort::InsertSort` | Wstawianie posortowane na listach obiektów świata | Przeszukiwanie od ostatnio wstawionego węzła |
+| `FastLineRead` *(eksperymentalne, domyślnie 0)* | `zCArchiverGeneric::RestoreStringEOL` | Tekstowy ZEN czytany jednym wirtualnym `Read` na bajt | Bajty prosto z bufora odczytu, te same reguły końca linii |
 | `FastSkipRemove` *(eksperymentalne, domyślnie 0)* | `oCWorld::RemoveFromLists` | Skany 3 list dla przedmiotów, których na nich nie ma | Pominięcie, gdy zbiory członków mówią „nie ma” |
 
 Przy profilowaniu podjąłem dwie próby, które zostały wycofane, bo prowadziły do crashy:
@@ -51,6 +52,7 @@ FastStringMap=1
 FastFileWrite=1
 FastListHints=0                  ; eksperymentalne
 FastSkipRemove=0                 ; eksperymentalne
+FastLineRead=0                   ; eksperymentalne: czytanie linii plików tekstowych (ZEN) prosto z bufora
 ; 0 = wyłączony, 1 = drzewo wywołań + profiler próbkujący (flamegraph), 3 = drzewo + hooki na każdy odczyt/zapis
 Profiler=0
 ```
@@ -66,6 +68,12 @@ python tools\flame.py deps\gothic-api\ZenGin\Gothic_I_Classic\Names.txt out <dum
 ```
 
 Polecenie tworzy interaktywny flamegraph (`out\LOAD.html` itd.) i tabelę najdroższych funkcji. Symbole exe pochodzą z `Names.txt` z gothic-api, a symbole DLL z ich eksportów. `tools\dumpstack.py` czyta stos ze zrzutu crasha Windows (`%LOCALAPPDATA%\CrashDumps`), a `tools\dis.ps1` disassembluje fragment `GothicMod.exe`.
+
+## Praca nad pluginem
+
+- `tools\dev.ps1`: build i wgranie `System\Autorun\zFastSaveLoad_dev.dll`. Kopia dev ma pierwszeństwo: inne kopie pluginu, np. z Workshopu, same się wyłączają. `-Remove` wraca do wersji z Workshopu.
+- `toolselease.ps1 "opis"`: build, wysłanie na Workshop i otwarcie strony moda (`-RemoveDev` usuwa kopię dev).
+- `tools\profile.ps1`: flamegraphy z dumpów ostatniego uruchomienia gry.
 
 ## Instalacja
 

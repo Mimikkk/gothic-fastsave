@@ -136,7 +136,7 @@ struct TreeScope {
   int idx = -1; long long t0;
   TreeScope(const std::string& name) {
     t0 = Now();
-    if (!g_session || GetCurrentThreadId() != g_mainThread) return;
+    if (!g_session || !g_profile || GetCurrentThreadId() != g_mainThread) return;
     // recursion (e.g. DisposeVobs over the vob tree): count it in the outermost call only
     for (int i : g_stack) if (g_tree[i].name == name) return;
     // repeated sibling calls: merge into one line with a call counter
@@ -413,80 +413,80 @@ void __fastcall EnterWorld_h(void* self, void* edx, void* npc, int a, const zSTR
 
 // ================================================================ aggregated hot functions
 int __fastcall VdfsOpen_h(void*, void*, const zSTRING&, bool);
-auto Hook_VdfsOpen = HOOK(0x00444CA0, &VdfsOpen_h);
+Union::Hook<decltype(&VdfsOpen_h)> Hook_VdfsOpen(nullptr);  // installed only with Profiler=3
 int __fastcall VdfsOpen_h(void* self, void* edx, const zSTRING& n, bool w) { AggScope s(A_VdfsOpen); return Hook_VdfsOpen(self, edx, n, w); }
 
 long __fastcall VdfsRead_h(void*, void*, void*, long);
-auto Hook_VdfsRead = HOOK(0x004468C0, &VdfsRead_h);
+Union::Hook<decltype(&VdfsRead_h)> Hook_VdfsRead(nullptr);  // installed only with Profiler=3
 long __fastcall VdfsRead_h(void* self, void* edx, void* buf, long n) { AggScope s(A_VdfsRead); long r = Hook_VdfsRead(self, edx, buf, n); s.bytes = r > 0 ? r : 0; return r; }
 
 int __fastcall FileOpen_h(void*, void*, const zSTRING&, bool);
-auto Hook_FileOpen = HOOK(0x0043F450, &FileOpen_h);
+Union::Hook<decltype(&FileOpen_h)> Hook_FileOpen(nullptr);  // installed only with Profiler=3
 int __fastcall FileOpen_h(void* self, void* edx, const zSTRING& n, bool w) { AggScope s(A_FileOpen); return Hook_FileOpen(self, edx, n, w); }
 
 long __fastcall FileRead_h(void*, void*, void*, long);
-auto Hook_FileRead = HOOK(0x00440980, &FileRead_h);
+Union::Hook<decltype(&FileRead_h)> Hook_FileRead(nullptr);  // installed only with Profiler=3
 long __fastcall FileRead_h(void* self, void* edx, void* buf, long n) { AggScope s(A_FileRead); long r = Hook_FileRead(self, edx, buf, n); s.bytes = r > 0 ? r : 0; return r; }
 
 long __fastcall FileWrite_h(void*, void*, const void*, long);
-auto Hook_FileWrite = HOOK(0x00440510, &FileWrite_h);
+Union::Hook<decltype(&FileWrite_h)> Hook_FileWrite(nullptr);  // installed only with Profiler=3
 long __fastcall FileWrite_h(void* self, void* edx, const void* buf, long n) { AggScope s(A_FileWrite); s.bytes = n; return Hook_FileWrite(self, edx, buf, n); }
 
 int __fastcall TexLoad_h(void*, void*);
-auto Hook_TexLoad = HOOK(0x005CA5E0, &TexLoad_h);
+Union::Hook<decltype(&TexLoad_h)> Hook_TexLoad(nullptr);  // installed only with Profiler=3
 int __fastcall TexLoad_h(void* self, void* edx) { AggScope s(A_TexLoad); if (GetCurrentThreadId() == g_mainThread) s.name = ObjName(self); return Hook_TexLoad(self, edx); }
 
 int __fastcall SndLoad_h(void*, void*);
-auto Hook_SndLoad = HOOK(0x004E7720, &SndLoad_h);
+Union::Hook<decltype(&SndLoad_h)> Hook_SndLoad(nullptr);  // installed only with Profiler=3
 int __fastcall SndLoad_h(void* self, void* edx) { AggScope s(A_SndLoad); return Hook_SndLoad(self, edx); }
 
 void* __cdecl LoadVisual_h(const zSTRING&);
-auto Hook_LoadVisual = HOOK(0x005DA1F0, &LoadVisual_h);
+Union::Hook<decltype(&LoadVisual_h)> Hook_LoadVisual(nullptr);  // installed only with Profiler=3
 void* __cdecl LoadVisual_h(const zSTRING& n) { AggScope s(A_LoadVisual); s.name = S(n); return Hook_LoadVisual(n); }
 
 void* __cdecl MeshLoad_h(const zSTRING&);
-auto Hook_MeshLoad = HOOK(0x005501A0, &MeshLoad_h);
+Union::Hook<decltype(&MeshLoad_h)> Hook_MeshLoad(nullptr);  // installed only with Profiler=3
 void* __cdecl MeshLoad_h(const zSTRING& n) { AggScope s(A_MeshLoad); s.name = S(n); return Hook_MeshLoad(n); }
 
 int __fastcall ProgMeshLoad_h(void*, void*, void*);
-auto Hook_ProgMeshLoad = HOOK(0x005A8F20, &ProgMeshLoad_h);
+Union::Hook<decltype(&ProgMeshLoad_h)> Hook_ProgMeshLoad(nullptr);  // installed only with Profiler=3
 int __fastcall ProgMeshLoad_h(void* self, void* edx, void* f) { AggScope s(A_ProgMeshLoad); return Hook_ProgMeshLoad(self, edx, f); }
 
 int __fastcall MorphMMB_h(void*, void*, const zSTRING&);
-auto Hook_MorphMMB = HOOK(0x00584230, &MorphMMB_h);
+Union::Hook<decltype(&MorphMMB_h)> Hook_MorphMMB(nullptr);  // installed only with Profiler=3
 int __fastcall MorphMMB_h(void* self, void* edx, const zSTRING& n) { AggScope s(A_MorphMMB); s.name = S(n); return Hook_MorphMMB(self, edx, n); }
 
 void* __cdecl ModelProtoLoad_h(const zSTRING&, void*);
-auto Hook_ModelProtoLoad = HOOK(0x0056EA80, &ModelProtoLoad_h);
+Union::Hook<decltype(&ModelProtoLoad_h)> Hook_ModelProtoLoad(nullptr);  // installed only with Profiler=3
 void* __cdecl ModelProtoLoad_h(const zSTRING& n, void* p) { AggScope s(A_ModelProtoLoad); s.name = S(n); return Hook_ModelProtoLoad(n, p); }
 
 int __fastcall ModelASC_h(void*, void*, const zSTRING&);
-auto Hook_ModelASC = HOOK(0x0057EB20, &ModelASC_h);
+Union::Hook<decltype(&ModelASC_h)> Hook_ModelASC(nullptr);  // installed only with Profiler=3
 int __fastcall ModelASC_h(void* self, void* edx, const zSTRING& n) { AggScope s(A_ModelASC); s.name = S(n); return Hook_ModelASC(self, edx, n); }
 
 int __fastcall LoadMAN_h(void*, void*, const zSTRING&, void*, const zSTRING&);
-auto Hook_LoadMAN = HOOK(0x0056CEB0, &LoadMAN_h);
+Union::Hook<decltype(&LoadMAN_h)> Hook_LoadMAN(nullptr);  // installed only with Profiler=3
 int __fastcall LoadMAN_h(void* self, void* edx, const zSTRING& n, void* p, const zSTRING& m) { AggScope s(A_LoadMAN); s.name = S(n); return Hook_LoadMAN(self, edx, n, p, m); }
 
 int __cdecl LoadMDM_h(const zSTRING&, void*, void*, void*);
-auto Hook_LoadMDM = HOOK(0x00580780, &LoadMDM_h);
+Union::Hook<decltype(&LoadMDM_h)> Hook_LoadMDM(nullptr);  // installed only with Profiler=3
 int __cdecl LoadMDM_h(const zSTRING& n, void* a, void* b, void* c) { AggScope s(A_LoadMDM); s.name = S(n); return Hook_LoadMDM(n, a, b, c); }
 
 void __fastcall NpcUnarchive_h(void*, void*, void*);
-auto Hook_NpcUnarchive = HOOK(0x006A31E0, &NpcUnarchive_h);
+Union::Hook<decltype(&NpcUnarchive_h)> Hook_NpcUnarchive(nullptr);  // installed only with Profiler=3
 void __fastcall NpcUnarchive_h(void* self, void* edx, void* arc) { AggScope s(A_NpcUnarchive); Hook_NpcUnarchive(self, edx, arc); }
 
 void __fastcall NpcInitModel_h(void*, void*);
-auto Hook_NpcInitModel = HOOK(0x00695020, &NpcInitModel_h);
+Union::Hook<decltype(&NpcInitModel_h)> Hook_NpcInitModel(nullptr);  // installed only with Profiler=3
 void __fastcall NpcInitModel_h(void* self, void* edx) { AggScope s(A_NpcInitModel); Hook_NpcInitModel(self, edx); }
 
 // zCArchiverBinSafe::ReadObject(char const*, zCObject*)  -- __fastcall member: ecx=this, edx=name
 void* __fastcall ArcReadObj_h(void*, const char*, void*);
-auto Hook_ArcReadObj = HOOK(0x0050F780, &ArcReadObj_h);
+Union::Hook<decltype(&ArcReadObj_h)> Hook_ArcReadObj(nullptr);  // installed only with Profiler=3
 void* __fastcall ArcReadObj_h(void* self, const char* n, void* o) { AggScope s(A_ArcReadObj); return Hook_ArcReadObj(self, n, o); }
 
 void __fastcall ArcWriteObj_h(void*, const char*, void*);
-auto Hook_ArcWriteObj = HOOK(0x0050E450, &ArcWriteObj_h);
+Union::Hook<decltype(&ArcWriteObj_h)> Hook_ArcWriteObj(nullptr);  // installed only with Profiler=3
 void __fastcall ArcWriteObj_h(void* self, const char* n, void* o) { AggScope s(A_ArcWriteObj); Hook_ArcWriteObj(self, n, o); }
 
 // ================================================================ frames after load (lazy cache-in stalls)
@@ -526,19 +526,34 @@ void __fastcall MenuRender_h(void* self, void* edx) {
   Hook_MenuRender(self, edx);
 }
 
-// Disable the per-call I/O and resource hooks unless Profiler=3 (they cost time themselves).
-static void DisableHotHooks() {
-  Hook_VdfsOpen.Disable(); Hook_VdfsRead.Disable(); Hook_FileOpen.Disable(); Hook_FileRead.Disable(); Hook_FileWrite.Disable();
-  Hook_TexLoad.Disable(); Hook_SndLoad.Disable(); Hook_LoadVisual.Disable(); Hook_MeshLoad.Disable(); Hook_ProgMeshLoad.Disable();
-  Hook_MorphMMB.Disable(); Hook_ModelProtoLoad.Disable(); Hook_ModelASC.Disable(); Hook_LoadMAN.Disable(); Hook_LoadMDM.Disable();
-  Hook_NpcUnarchive.Disable(); Hook_NpcInitModel.Disable(); Hook_ArcReadObj.Disable(); Hook_ArcWriteObj.Disable();
-}
-static void DisableProfilerHooks() {
-  Hook_VdfsOpen.Disable(); Hook_VdfsRead.Disable(); Hook_FileOpen.Disable(); Hook_FileRead.Disable(); Hook_FileWrite.Disable();
-  Hook_TexLoad.Disable(); Hook_SndLoad.Disable(); Hook_LoadVisual.Disable(); Hook_MeshLoad.Disable(); Hook_ProgMeshLoad.Disable();
-  Hook_MorphMMB.Disable(); Hook_ModelProtoLoad.Disable(); Hook_ModelASC.Disable(); Hook_LoadMAN.Disable(); Hook_LoadMDM.Disable();
-  Hook_NpcUnarchive.Disable(); Hook_NpcInitModel.Disable(); Hook_ArcReadObj.Disable(); Hook_ArcWriteObj.Disable();
-  Hook_zDisposeVobs.Disable(); Hook_zWorldUnarchive.Disable();
+// Per-call I/O and resource hooks cost time themselves, so they are only installed with Profiler=3.
+// Never use Hook::Disable(): union-api keeps the hook list in a singleton shared by all plugins, and
+// removing an entry reallocates memory owned by another plugin's CRT (heap corruption -> crash).
+static void InstallHotHooks() {
+  // the HookSpace condition is shared between plugins; make sure ours is the active one while creating hooks
+  auto& space = Union::HookSpace::GetCurrentInstance();
+  auto saved = space.Condition;
+  space.Condition = []() -> bool { return true; };
+  Hook_VdfsOpen = HOOK(0x00444CA0, &VdfsOpen_h);
+  Hook_VdfsRead = HOOK(0x004468C0, &VdfsRead_h);
+  Hook_FileOpen = HOOK(0x0043F450, &FileOpen_h);
+  Hook_FileRead = HOOK(0x00440980, &FileRead_h);
+  Hook_FileWrite = HOOK(0x00440510, &FileWrite_h);
+  Hook_TexLoad = HOOK(0x005CA5E0, &TexLoad_h);
+  Hook_SndLoad = HOOK(0x004E7720, &SndLoad_h);
+  Hook_LoadVisual = HOOK(0x005DA1F0, &LoadVisual_h);
+  Hook_MeshLoad = HOOK(0x005501A0, &MeshLoad_h);
+  Hook_ProgMeshLoad = HOOK(0x005A8F20, &ProgMeshLoad_h);
+  Hook_MorphMMB = HOOK(0x00584230, &MorphMMB_h);
+  Hook_ModelProtoLoad = HOOK(0x0056EA80, &ModelProtoLoad_h);
+  Hook_ModelASC = HOOK(0x0057EB20, &ModelASC_h);
+  Hook_LoadMAN = HOOK(0x0056CEB0, &LoadMAN_h);
+  Hook_LoadMDM = HOOK(0x00580780, &LoadMDM_h);
+  Hook_NpcUnarchive = HOOK(0x006A31E0, &NpcUnarchive_h);
+  Hook_NpcInitModel = HOOK(0x00695020, &NpcInitModel_h);
+  Hook_ArcReadObj = HOOK(0x0050F780, &ArcReadObj_h);
+  Hook_ArcWriteObj = HOOK(0x0050E450, &ArcWriteObj_h);
+  space.Condition = saved;
 }
 
 static void EnsureConfigured() {
@@ -548,9 +563,8 @@ static void EnsureConfigured() {
   g_profLevel = IniInt("Profiler", 1);
   g_profile = g_profLevel != 0;
   IniInt("KeepResources", 1); IniInt("KeepResourcesOnChangeLevel", 0);  // make the keys appear in GOTHIC.INI
-  if (!g_profile) DisableProfilerHooks();
-  else if (g_profLevel != 3) DisableHotHooks();
-  else if (FILE* f = OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler active #####\n"); fclose(f); }
+  if (g_profLevel == 3) InstallHotHooks();
+  if (g_profile) if (FILE* f = OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler active (level %d) #####\n", g_profLevel); fclose(f); }
 }
 
 } // namespace Gothic_I_Classic

@@ -12,6 +12,7 @@
 
 #include <Windows.h>
 #include <Union/Hook.h>
+#include "DevOverride.h"
 #include <ZenGin/zGothicAPI.h>
 #include <vector>
 #include <string>
@@ -22,13 +23,13 @@
 #include <algorithm>
 #include "Common.h"
 
-HOOKSPACE(Gothic_I_Classic_Opt, GetGameVersion() == Engine_G1);
+HOOKSPACE(Gothic_I_Classic_Opt, GetGameVersion() == Engine_G1 && ZFSL_Active());
 
 namespace Gothic_I_Classic {
 
 #define HOOK(addr, fn) Union::CreateHook(reinterpret_cast<void*>(addr), fn, Union::HookType::Hook_Detours)
 
-struct Stats { long hintHit, hintMiss, removeSkip, wpHasFast; long fastWp, fastAniHit, fastAniCheck, fastAniBad, listSkip, readServed, readFills, mapFast, mapRebuild, writeBuffered, writeFlushes; };
+struct Stats { long lineFast; long hintHit, hintMiss, removeSkip, wpHasFast; long fastWp, fastAniHit, fastAniCheck, fastAniBad, listSkip, readServed, readFills, mapFast, mapRebuild, writeBuffered, writeFlushes; };
 static Stats S{};
 
 // engine string layout: zSTRING = { vtbl, std::string { alloc, char* ptr, size_t len, size_t cap } }
@@ -441,6 +442,49 @@ int __fastcall VOpen2_h(void*, void*, bool);
 auto Hook_VOpen2 = HOOK(0x00445090, &VOpen2_h);
 int __fastcall VOpen2_h(void* f, void* e, bool w) { RRelease(f); return Hook_VOpen2(f, e, w); }
 
+// zCArchiverGeneric::RestoreStringEOL (0x00514750, __fastcall: ecx = archiver, edx = zSTRING&)
+// In ASCII file mode (binaryMode == 0, no cbuffer) it reads the line one byte per virtual Read call.
+// Same algorithm here, but bytes come straight out of the read-ahead buffer; when it is empty we fall back
+// to the virtual Read (which refills it). Original rules: stop at LF (consumed) or CR (consumed, the
+// following LF stays in the stream), tabs are dropped, the text is appended in 5000-byte pieces via
+// strlen (so a NUL cuts the rest of its piece).
+void __fastcall RestoreStringEOL_h(void*, zSTRING*);
+auto Hook_RestoreStringEOL = HOOK(0x00514750, &RestoreStringEOL_h);
+void __fastcall RestoreStringEOL_h(void* arc, zSTRING* str) {
+  void* file = *(void**)((char*)arc + 0x2C);
+  if (!g_optOn[OPT_FileRead] || !IsMainThread() || *(int*)((char*)arc + 0x3C) != 0 || *(int*)((char*)arc + 0x24) != 0 || !file) {
+    Hook_RestoreStringEOL(arc, str);
+    return;
+  }
+  typedef long(__thiscall* ReadFn)(void*, void*, long);
+  ReadFn vread = (ReadFn)(*(void***)file)[0xCC / 4];
+  static char piece[5001];
+  std::string acc;
+  int n = 0;
+  auto getc = [&](char* c) -> bool {
+    RBuf* b = RB(file, false);
+    if (b && b->active && b->off < b->len) {
+      *c = b->data[b->off++];
+      *(long*)((char*)file + 0x2A00) = 1; *(bool*)((char*)file + 0x2A04) = false;
+      S.readServed++;
+      return true;
+    }
+    return vread(file, c, 1) == 1;
+  };
+  auto flush = [&]() { piece[n] = 0; acc.append(piece, strlen(piece)); n = 0; };
+  char c;
+  if (getc(&c) && c != 0x0A) {
+    for (;;) {
+      if (c == 0x0D) break;
+      if (c != 0x09) { piece[n++] = c; if (n == 5000) flush(); }
+      if (!getc(&c) || c == 0x0A) break;
+    }
+  }
+  flush();
+  *str = acc.c_str();
+  S.lineFast++;
+}
+
 // =====================================================================================================
 // FastFileWrite - write buffer for zFILE_FILE::Write(void*,long) while saving
 // Positions: Pos() = position at buffer start + buffered bytes. Every other operation flushes first.
@@ -659,6 +703,7 @@ void Opt_SessionEnd() {
 }
 
 void Opt_WriteStats(FILE* f) {
+  fprintf(f, "  -- ascii lines read fast=%ld\n", S.lineFast);
   fprintf(f, "  -- lists (experimental): insert hint hit=%ld miss=%ld  removals skipped=%ld\n", S.hintHit, S.hintMiss, S.removeSkip);
   fprintf(f, "  -- optimizations: waypoint=%ld  ani memo hit=%ld check=%ld bad=%ld (models trusted=%d)  list scans skipped=%ld\n"
              "                    read served=%ld fills=%ld  stringmap fast=%ld rebuilds=%ld  writes buffered=%ld flushes=%ld --\n",

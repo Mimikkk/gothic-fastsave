@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 #include <Union/Hook.h>
+#include "DevOverride.h"
 #include <ZenGin/zGothicAPI.h>
 #include <vector>
 #include <string>
@@ -13,7 +14,7 @@
 #include "Sampler.h"
 #include "Common.h"
 
-HOOKSPACE(Gothic_I_Classic, GetGameVersion() == Engine_G1);
+HOOKSPACE(Gothic_I_Classic, GetGameVersion() == Engine_G1 && ZFSL_Active());
 
 namespace Gothic_I_Classic {
 
@@ -602,6 +603,7 @@ static void EnsureConfigured() {
 BOOL WINAPI DllMain(HMODULE, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     if (GetGameVersion() != Engine_G1) return FALSE;
+    if (!ZFSL_Active()) return TRUE;   // a zFastSaveLoad_dev.dll is installed next to us: stay inactive
     Gothic_I_Classic::g_mainThread = GetCurrentThreadId();
     // zoptions does not exist yet: read the profiler level straight from GOTHIC.INI to profile the startup
     char exe[MAX_PATH]; GetModuleFileNameA(nullptr, exe, MAX_PATH);

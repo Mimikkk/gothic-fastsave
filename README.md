@@ -48,6 +48,8 @@ Plik `System\zFastSaveLoad.ini`, czytany przy każdym wczytaniu, więc zmiany dz
 KeepResources=2
 ; To samo przy zmianie poziomu. Zwiększa chwilowe zużycie RAM.
 KeepResourcesOnChangeLevel=0
+; 1 = raport do SystemzFastSaveLoad.log, 0 = profiler wyłączony (mniejszy narzut; czytane przy starcie gry)
+Profiler=1
 ```
 
 ## Instalacja

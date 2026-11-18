@@ -26,8 +26,9 @@ static int   g_depth = 0;            // tree depth (main thread only)
 static long long g_sessionStart = 0;
 static std::string g_sessionName;
 
-struct TreeEvent { int depth; std::string name; long long start; long long ticks; };
+struct TreeEvent { int depth; std::string name; long long start; long long ticks; int calls; };
 static std::vector<TreeEvent> g_tree;
+static std::vector<int> g_stack;  // indices of open tree events
 
 struct Named { double ms; std::string name; };
 struct Agg {
@@ -81,7 +82,8 @@ static std::string LogPath() {
   return p + "zFastSaveLoad.log";
 }
 
-static FILE* OpenLog() { return fopen(LogPath().c_str(), "a"); }
+static bool g_profile = true;  // Profiler=0 in ini: no log, hot-path I/O hooks disabled
+static FILE* OpenLog() { return g_profile ? fopen(LogPath().c_str(), "a") : nullptr; }
 
 static void WriteAggs(FILE* f) {
   fprintf(f, "  -- aggregated (inclusive, may overlap) --\n");
@@ -95,7 +97,7 @@ static void WriteAggs(FILE* f) {
 }
 
 static void SessionBegin(const std::string& name) {
-  g_session = true; g_depth = 0; g_tree.clear(); AggReset();
+  g_session = true; g_depth = 0; g_tree.clear(); g_stack.clear(); AggReset();
   g_sessionName = name; g_sessionStart = Now();
 }
 
@@ -109,7 +111,9 @@ static void SessionEnd(bool watchFrames) {
     SYSTEMTIME st; GetLocalTime(&st);
     fprintf(f, "\n===== %02d:%02d:%02d  %s  TOTAL %.1f ms =====\n", st.wHour, st.wMinute, st.wSecond, g_sessionName.c_str(), Ms(total));
     for (auto& e : g_tree) {
-      fprintf(f, "  %8.1f ms  @%7.1f  %*s%s\n", Ms(e.ticks), Ms(e.start - g_sessionStart), e.depth * 2, "", e.name.c_str());
+      fprintf(f, "  %8.1f ms  @%7.1f  %*s%s", Ms(e.ticks), Ms(e.start - g_sessionStart), e.depth * 2, "", e.name.c_str());
+      if (e.calls > 1) fprintf(f, "  (x%d)", e.calls);
+      fprintf(f, "\n");
     }
     WriteAggs(f);
     fclose(f);
@@ -125,14 +129,24 @@ struct TreeScope {
   int idx = -1; long long t0;
   TreeScope(const std::string& name) {
     t0 = Now();
-    if (g_session && GetCurrentThreadId() == g_mainThread) {
-      idx = (int)g_tree.size();
-      g_tree.push_back({ g_depth, name, t0, 0 });
-      g_depth++;
+    if (!g_session || GetCurrentThreadId() != g_mainThread) return;
+    // recursion (e.g. DisposeVobs over the vob tree): count it in the outermost call only
+    for (int i : g_stack) if (g_tree[i].name == name) return;
+    // repeated sibling calls: merge into one line with a call counter
+    for (int i = (int)g_tree.size() - 1; i >= 0 && g_tree[i].depth >= g_depth; i--) {
+      if (g_tree[i].depth == g_depth) {
+        if (g_tree[i].name == name) idx = i;
+        break;
+      }
     }
+    if (idx < 0) { idx = (int)g_tree.size(); g_tree.push_back({ g_depth, name, t0, 0, 0 }); }
+    g_tree[idx].calls++;
+    g_stack.push_back(idx);
+    g_depth++;
   }
   ~TreeScope() {
-    if (idx >= 0) { g_tree[idx].ticks = Now() - t0; g_depth--; }
+    if (idx < 0) return;
+    g_tree[idx].ticks += Now() - t0; g_depth--; g_stack.pop_back();
   }
 };
 
@@ -485,12 +499,23 @@ void __fastcall Render_h(void* self, void* edx) {
   }
 }
 
+// Disable the per-call I/O and resource hooks when profiling is off (they cost time themselves).
+static void DisableProfilerHooks() {
+  Hook_VdfsOpen.Disable(); Hook_VdfsRead.Disable(); Hook_FileOpen.Disable(); Hook_FileRead.Disable(); Hook_FileWrite.Disable();
+  Hook_TexLoad.Disable(); Hook_SndLoad.Disable(); Hook_LoadVisual.Disable(); Hook_MeshLoad.Disable(); Hook_ProgMeshLoad.Disable();
+  Hook_MorphMMB.Disable(); Hook_ModelProtoLoad.Disable(); Hook_ModelASC.Disable(); Hook_LoadMAN.Disable(); Hook_LoadMDM.Disable();
+  Hook_NpcUnarchive.Disable(); Hook_NpcInitModel.Disable(); Hook_ArcReadObj.Disable(); Hook_ArcWriteObj.Disable();
+  Hook_zDisposeVobs.Disable(); Hook_zWorldUnarchive.Disable();
+}
+
 } // namespace Gothic_I_Classic
 
 BOOL WINAPI DllMain(HMODULE, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     if (GetGameVersion() != Engine_G1) return FALSE;
     Gothic_I_Classic::g_mainThread = GetCurrentThreadId();
+    Gothic_I_Classic::g_profile = Gothic_I_Classic::IniInt("Profiler", 1) != 0;
+    if (!Gothic_I_Classic::g_profile) Gothic_I_Classic::DisableProfilerHooks();
     if (FILE* f = Gothic_I_Classic::OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler loaded #####\n"); fclose(f); }
   }
   return TRUE;

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <cstdio>
+#include "Sampler.h"
 
 HOOKSPACE(Gothic_I_Classic, GetGameVersion() == Engine_G1);
 
@@ -82,7 +83,9 @@ static std::string LogPath() {
   return p + "zFastSaveLoad.log";
 }
 
-static bool g_profile = true;  // Profiler=0 in ini: no log, hot-path I/O hooks disabled
+// Profiler: 0 = off, 1 = call tree + sampling profiler (flamegraph data), 3 = call tree + per-call I/O hooks
+static int  g_profLevel = 1;
+static bool g_profile = true;
 static FILE* OpenLog() { return g_profile ? fopen(LogPath().c_str(), "a") : nullptr; }
 
 static void WriteAggs(FILE* f) {
@@ -101,6 +104,7 @@ static void SessionBegin(const std::string& name) {
   EnsureConfigured();
   g_session = true; g_depth = 0; g_tree.clear(); g_stack.clear(); AggReset();
   g_sessionName = name; g_sessionStart = Now();
+  if (g_profLevel == 1) { if (Sampler::Active()) Sampler::End("STARTUP"); Sampler::Begin(); }
 }
 
 static int g_watchFrames = 0;
@@ -121,6 +125,7 @@ static void SessionEnd(bool watchFrames) {
     fclose(f);
   }
   g_session = false;
+  if (g_profLevel == 1) Sampler::End(g_sessionName.c_str());
   if (watchFrames) {
     g_watchFrames = 300; g_watchStart = Now(); g_watchWorst = 0; g_watchSum = 0; g_watchSlow = 0;
     AggReset();
@@ -507,7 +512,27 @@ void __fastcall Render_h(void* self, void* edx) {
   }
 }
 
-// Disable the per-call I/O and resource hooks when profiling is off (they cost time themselves).
+void __fastcall MenuRender_h(void*, void*);
+auto Hook_MenuRender = HOOK(0x004D0DA0, &MenuRender_h);
+void __fastcall MenuRender_h(void* self, void* edx) {
+  static bool first = true;
+  if (first) {
+    first = false;
+    if (Sampler::Active() && !g_session) {
+      Sampler::End("STARTUP");
+      if (FILE* f = OpenLog()) { fprintf(f, "\n===== STARTUP (DLL load -> first menu frame) sampled =====\n"); fclose(f); }
+    }
+  }
+  Hook_MenuRender(self, edx);
+}
+
+// Disable the per-call I/O and resource hooks unless Profiler=3 (they cost time themselves).
+static void DisableHotHooks() {
+  Hook_VdfsOpen.Disable(); Hook_VdfsRead.Disable(); Hook_FileOpen.Disable(); Hook_FileRead.Disable(); Hook_FileWrite.Disable();
+  Hook_TexLoad.Disable(); Hook_SndLoad.Disable(); Hook_LoadVisual.Disable(); Hook_MeshLoad.Disable(); Hook_ProgMeshLoad.Disable();
+  Hook_MorphMMB.Disable(); Hook_ModelProtoLoad.Disable(); Hook_ModelASC.Disable(); Hook_LoadMAN.Disable(); Hook_LoadMDM.Disable();
+  Hook_NpcUnarchive.Disable(); Hook_NpcInitModel.Disable(); Hook_ArcReadObj.Disable(); Hook_ArcWriteObj.Disable();
+}
 static void DisableProfilerHooks() {
   Hook_VdfsOpen.Disable(); Hook_VdfsRead.Disable(); Hook_FileOpen.Disable(); Hook_FileRead.Disable(); Hook_FileWrite.Disable();
   Hook_TexLoad.Disable(); Hook_SndLoad.Disable(); Hook_LoadVisual.Disable(); Hook_MeshLoad.Disable(); Hook_ProgMeshLoad.Disable();
@@ -520,9 +545,11 @@ static void EnsureConfigured() {
   static bool configured = false;
   if (configured || !zoptions) return;
   configured = true;
-  g_profile = IniInt("Profiler", 1) != 0;
+  g_profLevel = IniInt("Profiler", 1);
+  g_profile = g_profLevel != 0;
   IniInt("KeepResources", 1); IniInt("KeepResourcesOnChangeLevel", 0);  // make the keys appear in GOTHIC.INI
   if (!g_profile) DisableProfilerHooks();
+  else if (g_profLevel != 3) DisableHotHooks();
   else if (FILE* f = OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler active #####\n"); fclose(f); }
 }
 
@@ -532,6 +559,14 @@ BOOL WINAPI DllMain(HMODULE, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     if (GetGameVersion() != Engine_G1) return FALSE;
     Gothic_I_Classic::g_mainThread = GetCurrentThreadId();
+    // zoptions does not exist yet: read the profiler level straight from GOTHIC.INI to profile the startup
+    char exe[MAX_PATH]; GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    std::string dir = exe; dir = dir.substr(0, dir.find_last_of("\\/") + 1);
+    int level = GetPrivateProfileIntA("ZFASTSAVELOAD", "Profiler", 1, (dir + "GOTHIC.INI").c_str());
+    if (level == 1) {
+      Sampler::Init((dir + "zFastSaveLoad_prof").c_str());
+      Sampler::BeginAsync();
+    }
   }
   return TRUE;
 }

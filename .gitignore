@@ -1,5 +1,6 @@
+*.log
+.vs/
 build/
 out/
-.vs/
-*.log
+prof/
 workshop/Content/System/Autorun/*.dll

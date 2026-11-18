@@ -70,6 +70,15 @@ class Symbolizer:
         self.mods = sorted(modules)  # (base, size, path)
         self.exp = {}
 
+    @staticmethod
+    def fix_path(path):
+        # 32-bit process: System32 paths are really SysWOW64 (we run as a 64-bit Python)
+        low = path.lower()
+        if '\\windows\\system32\\' in low:
+            i = low.index('\\windows\\system32\\') + len('\\windows\\')
+            path = path[:i] + 'SysWOW64' + path[i + len('system32'):]
+        return path
+
     def module(self, a):
         for base, size, path in self.mods:
             if base <= a < base + size:
@@ -85,10 +94,15 @@ class Symbolizer:
         if base == 0x400000:
             i = bisect.bisect_right(self.ex_addrs, a) - 1
             if i >= 0 and a - self.ex_addrs[i] < 0x8000:
+                d = a - self.ex_addrs[i]
+                nxt = self.ex_addrs[i + 1] - self.ex_addrs[i] if i + 1 < len(self.ex_addrs) else 0
+                # far past a small known symbol: probably an unnamed internal function after it
+                if d > 0x600 and (nxt == 0 or nxt > d):
+                    return None, '?after ' + self.ex_names[i]
                 return self.ex_addrs[i], self.ex_names[i]
             return None, '%s+%X' % (mod, a - base)
         if path not in self.exp:
-            self.exp[path] = pe_exports(path)
+            self.exp[path] = pe_exports(self.fix_path(path))
         ea, en = self.exp[path]
         rva = a - base
         i = bisect.bisect_right(ea, rva) - 1
@@ -125,6 +139,7 @@ def unwind(sym, frames):
     leaf = frames[0][0]
     cur_start, cur_name = sym.resolve(leaf)
     out = [cur_name]
+    seen_exe = sym.module(leaf)[0] == 0x400000
     for ret, tgt in frames[1:]:
         if tgt:
             t_start, t_name = sym.resolve(tgt)
@@ -142,6 +157,12 @@ def unwind(sym, frames):
                 if tb == cb and tgt > leaf:
                     continue
         s, n = sym.resolve(ret)
+        rb, _ = sym.module(ret)
+        if rb != 0x400000 and seen_exe:
+            if not (tgt and cur_start is not None and (tgt == cur_start or sym.resolve(tgt)[0] == cur_start)):
+                continue
+        if rb == 0x400000:
+            seen_exe = True
         out.append(n)
         cur_start, leaf = s, ret
     out.reverse()

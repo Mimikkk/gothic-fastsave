@@ -28,12 +28,56 @@ namespace Gothic_I_Classic {
 
 #define HOOK(addr, fn) Union::CreateHook(reinterpret_cast<void*>(addr), fn, Union::HookType::Hook_Detours)
 
-struct Stats { long fastWp, fastAniHit, fastAniCheck, fastAniBad, listSkip, readServed, readFills, mapFast, mapRebuild, writeBuffered, writeFlushes; };
+struct Stats { long hintHit, hintMiss, removeSkip, wpHasFast; long fastWp, fastAniHit, fastAniCheck, fastAniBad, listSkip, readServed, readFills, mapFast, mapRebuild, writeBuffered, writeFlushes; };
 static Stats S{};
 
 // engine string layout: zSTRING = { vtbl, std::string { alloc, char* ptr, size_t len, size_t cap } }
 static inline const char* ZPtr(const void* z) { const char* p = *(const char* const*)((const char*)z + 8); return p ? p : ""; }
 static inline unsigned ZLen(const void* z) { return *(const unsigned*)((const char*)z + 12); }
+
+// ---------------------------------------------------------------- hinted sorted-list insertion
+typedef void(__thiscall* InsSortFn)(void* list, void* elem);
+typedef int(__cdecl* ListCmpFn)(void* a, void* b);
+
+// zCListSort<T>::InsertSort inserts after every element e with Compare(new, e) >= 0 (stable upper bound).
+// If Compare(new, lastInserted) >= 0 the walk may start at lastInserted: identical result. We start the
+// original function on a fake list header whose "next" is the hint node; since the first comparison is
+// >= 0, the fake header itself is never modified and the node is linked into the real list.
+struct Hint { void* list = nullptr; void* node = nullptr; void* data = nullptr; long hits = 0, misses = 0; bool off = false; };
+static Hint g_hint[4];   // 0 voblist, 1 npcs, 2 items, 3 waypoints
+static thread_local bool t_capture = false;
+static thread_local void* t_captured = nullptr;
+static void HintsReset() { for (auto& h : g_hint) h = Hint{}; }
+static void HintForget(void* data) { for (auto& h : g_hint) if (h.data == data) { h.node = nullptr; h.data = nullptr; } }
+
+void* __fastcall PoolAlloc_h(void*, void*);
+auto Hook_PoolAlloc = HOOK(0x0054F170, &PoolAlloc_h);
+void* __fastcall PoolAlloc_h(void* pool, void* edx) {
+  void* r = Hook_PoolAlloc(pool, edx);
+  if (t_capture && !t_captured) t_captured = r;
+  return r;
+}
+
+static void HintedInsert(InsSortFn orig, Hint& h, void* list, void* elem) {
+  if (!h.off && h.list == list && h.node && *(void**)((char*)h.node + 4) == h.data) {
+    ListCmpFn cmp = *(ListCmpFn*)list;
+    if (cmp(elem, h.data) >= 0) {
+      struct { void* cmp; void* data; void* next; } fake = { *(void**)list, nullptr, h.node };
+      t_capture = true; t_captured = nullptr;
+      orig(&fake, elem);
+      t_capture = false;
+      if (t_captured) { h.node = t_captured; h.data = elem; }
+      h.hits++; S.hintHit++;
+      return;
+    }
+    h.misses++; S.hintMiss++;
+    if (h.misses > 64 && h.misses > h.hits) h.off = true;   // insert order does not follow the sort order
+  }
+  t_capture = !h.off; t_captured = nullptr;
+  orig(list, elem);
+  t_capture = false;
+  if (!h.off && t_captured) { h.list = list; h.node = t_captured; h.data = elem; }
+}
 
 // =====================================================================================================
 // FastWaypoints - zCWayNet::GetWaypoint (0x00706730, __fastcall: ecx = this, edx = const zSTRING&)
@@ -103,7 +147,41 @@ auto Hook_WnDel = HOOK(0x007036A0, &WnDel_h);
 void __fastcall WnDel_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnDel(s, e, a); WpInvalidate(); }
 void __fastcall WnUnarc_h(void*, void*, void*);
 auto Hook_WnUnarc = HOOK(0x00708530, &WnUnarc_h);
-void __fastcall WnUnarc_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnUnarc(s, e, a); WpInvalidate(); }
+static void* g_wnUnarcNet = nullptr;
+static std::unordered_set<void*> g_wnMembers;
+void __fastcall WnUnarc_h(void* s, void* e, void* a) {
+  WpInvalidate();
+  g_hint[3] = Hint{};
+  bool fast = g_optOn[OPT_Waypoints] && IsMainThread();
+  if (fast) {
+    g_wnMembers.clear();
+    for (void* n = *(void**)((char*)s + 0x30); n; n = *(void**)((char*)n + 8)) g_wnMembers.insert(*(void**)((char*)n + 4));
+    g_wnUnarcNet = s;
+  }
+  Hook_WnUnarc(s, e, a);
+  g_wnUnarcNet = nullptr; g_wnMembers.clear(); g_hint[3] = Hint{};
+  WpInvalidate();
+}
+
+// zCWayNet::HasWaypoint(zCWaypoint*) (0x00703360): linear walk over wplist
+int __fastcall WnHas_h(void*, void*, void*);
+auto Hook_WnHas = HOOK(0x00703360, &WnHas_h);
+int __fastcall WnHas_h(void* net, void* e, void* wp) {
+  if (net == g_wnUnarcNet && IsMainThread()) { S.wpHasFast++; return g_wnMembers.count(wp) ? 1 : 0; }
+  return Hook_WnHas(net, e, wp);
+}
+
+// zCListSort<zCWaypoint>::InsertSort (0x0070A400)
+void __fastcall WpInsSort_h(void*, void*, void*);
+auto Hook_WpInsSort = HOOK(0x0070A400, &WpInsSort_h);
+void __fastcall WpInsSort_h(void* l, void* e, void* wp) {
+  if (g_wnUnarcNet && IsMainThread() && l == (char*)g_wnUnarcNet + 0x28) {
+    HintedInsert((InsSortFn)(void*)Hook_WpInsSort, g_hint[3], l, wp);
+    g_wnMembers.insert(wp);
+    return;
+  }
+  Hook_WpInsSort(l, e, wp);
+}
 void __fastcall WnUnarcOld_h(void*, void*, void*);
 auto Hook_WnUnarcOld = HOOK(0x00707A30, &WnUnarcOld_h);
 void __fastcall WnUnarcOld_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnUnarcOld(s, e, a); WpInvalidate(); }
@@ -123,6 +201,16 @@ struct AniMemo {
   int state = 0;           // 0 = learning, 1 = trusted, -1 = disabled
   int good = 0, calls = 0;
   std::vector<uint8_t> mask, after;
+  std::vector<std::pair<uint16_t, uint16_t>> runs;   // contiguous masked ranges, for a fast replay
+  void BuildRuns() {
+    runs.clear();
+    for (size_t i = 0; i < mask.size();) {
+      if (!mask[i]) { i++; continue; }
+      size_t j = i; while (j < mask.size() && mask[j]) j++;
+      runs.push_back({ (uint16_t)i, (uint16_t)(j - i) });
+      i = j;
+    }
+  }
 };
 struct VecHash { size_t operator()(const std::vector<void*>& v) const { size_t h = 0; for (void* p : v) h = h * 1000003u ^ (size_t)p; return h; } };
 static std::unordered_map<std::vector<void*>, AniMemo, VecHash> g_ani;
@@ -144,7 +232,7 @@ void __fastcall InitAllAnis_h(void* self, void* edx) {
 
   if (m.state == 1 && (m.calls % 32) != 0) {               // trusted: replay
     uint8_t* o = (uint8_t*)self;
-    for (size_t i = 0; i < kAniCtrlSize; i++) if (m.mask[i]) o[i] = m.after[i];
+    for (auto& r : m.runs) memcpy(o + r.first, m.after.data() + r.first, r.second);
     S.fastAniHit++;
     return;
   }
@@ -171,7 +259,7 @@ void __fastcall InitAllAnis_h(void* self, void* edx) {
   }
   if (!ok) { m.state = -1; S.fastAniBad++; return; }
   if (grew) { m.good = 0; if (m.state == 1) m.state = 0; return; }
-  if (m.state == 0 && ++m.good >= 3) m.state = 1;
+  if (m.state == 0 && ++m.good >= 3) { m.state = 1; m.BuildRuns(); }
 }
 
 // =====================================================================================================
@@ -199,23 +287,45 @@ static ListSet& SetFor(void* list, int idx) {
 }
 static void SetsReset() { for (auto& ls : g_ls) { ls.built = false; ls.s.clear(); ls.list = nullptr; } }
 
-typedef void(__thiscall* InsSortFn)(void* list, void* elem);
+
 void __fastcall InsSortVob_h(void*, void*, void*);
 auto Hook_InsSortVob = HOOK(0x006D8260, &InsSortVob_h);
-void __fastcall InsSortVob_h(void* l, void* e, void* v) { Hook_InsSortVob(l, e, v); if (IsMainThread() && g_ls[0].built && g_ls[0].list == l) g_ls[0].s.insert(v); }
+static bool HintsActive() { return InLoadSession() && g_optOn[OPT_WorldLists] && IsMainThread(); }
+void __fastcall InsSortVob_h(void* l, void* e, void* v) { if (HintsActive()) HintedInsert((InsSortFn)(void*)Hook_InsSortVob, g_hint[0], l, v); else Hook_InsSortVob(l, e, v); if (IsMainThread() && g_ls[0].built && g_ls[0].list == l) g_ls[0].s.insert(v); }
 void __fastcall InsSortNpc_h(void*, void*, void*);
 auto Hook_InsSortNpc = HOOK(0x006D82F0, &InsSortNpc_h);
-void __fastcall InsSortNpc_h(void* l, void* e, void* v) { Hook_InsSortNpc(l, e, v); if (IsMainThread() && g_ls[1].built && g_ls[1].list == l) g_ls[1].s.insert(v); }
+void __fastcall InsSortNpc_h(void* l, void* e, void* v) { if (HintsActive()) HintedInsert((InsSortFn)(void*)Hook_InsSortNpc, g_hint[1], l, v); else Hook_InsSortNpc(l, e, v); if (IsMainThread() && g_ls[1].built && g_ls[1].list == l) g_ls[1].s.insert(v); }
 void __fastcall InsSortItem_h(void*, void*, void*);
 auto Hook_InsSortItem = HOOK(0x006D8140, &InsSortItem_h);
-void __fastcall InsSortItem_h(void* l, void* e, void* v) { Hook_InsSortItem(l, e, v); if (IsMainThread() && g_ls[2].built && g_ls[2].list == l) g_ls[2].s.insert(v); }
+void __fastcall InsSortItem_h(void* l, void* e, void* v) { if (HintsActive()) HintedInsert((InsSortFn)(void*)Hook_InsSortItem, g_hint[2], l, v); else Hook_InsSortItem(l, e, v); if (IsMainThread() && g_ls[2].built && g_ls[2].list == l) g_ls[2].s.insert(v); }
 
 void __fastcall RemoveFromLists_h(void*, void*);
 auto Hook_RemoveFromLists = HOOK(0x006D7750, &RemoveFromLists_h);
 void __fastcall RemoveFromLists_h(void* w, void* vob) {
+  // RemoveFromLists = AddRef, unlink from the lists that contain the vob, Release. For a vob in none of
+  // the lists that is a no-op; the sets are exact while loading (all inserts go through the hooked
+  // InsertSort, bulk removals reset them), so the three list walks can be skipped.
+  if (vob && InLoadSession() && g_optOn[OPT_WorldLists] && IsMainThread() && ((zCObject*)vob)->refCtr > 0) {
+    ListSet& a = SetFor(*(void**)((char*)w + 0x6268), 0);
+    ListSet& b = SetFor(*(void**)((char*)w + 0x626C), 1);
+    ListSet& c = SetFor(*(void**)((char*)w + 0x6270), 2);
+    if (!a.s.count(vob) && !b.s.count(vob) && !c.s.count(vob)) { S.removeSkip++; return; }
+  }
+  if (IsMainThread()) HintForget(vob);
   Hook_RemoveFromLists(w, vob);
   if (IsMainThread()) for (auto& ls : g_ls) if (ls.built) ls.s.erase(vob);
 }
+
+// bulk removals (not through RemoveFromLists): drop sets and hints
+void __fastcall OwDisposeVobs_h(void*, void*);
+auto Hook_OwDisposeVobs = HOOK(0x006D7990, &OwDisposeVobs_h);
+void __fastcall OwDisposeVobs_h(void* w, void* e) { SetsReset(); HintsReset(); Hook_OwDisposeVobs(w, e); SetsReset(); HintsReset(); }
+void __fastcall OwDisposeWorld_h(void*, void*);
+auto Hook_OwDisposeWorld = HOOK(0x006D7B10, &OwDisposeWorld_h);
+void __fastcall OwDisposeWorld_h(void* w, void* e) { SetsReset(); HintsReset(); Hook_OwDisposeWorld(w, e); SetsReset(); HintsReset(); }
+void __fastcall OwDtor_h(void*, void*);
+auto Hook_OwDtor = HOOK(0x006D5F30, &OwDtor_h);
+void __fastcall OwDtor_h(void* w, void* e) { SetsReset(); HintsReset(); Hook_OwDtor(w, e); }
 
 static bool MemberFast(void* list, int idx, void* vob) {
   ListSet& ls = SetFor(list, idx);
@@ -549,17 +659,18 @@ void __fastcall BsClose_h(void* arc, void* edx) {
 
 // =====================================================================================================
 void Opt_SessionBegin() {
-  SetsReset();
+  SetsReset(); HintsReset();
   S = Stats{};
 }
 
 void Opt_SessionEnd() {
   WFlushAll();
-  SetsReset();
+  SetsReset(); HintsReset();
   g_sm.clear();
 }
 
 void Opt_WriteStats(FILE* f) {
+  fprintf(f, "  -- lists: insert hint hit=%ld miss=%ld  removals skipped=%ld  HasWaypoint fast=%ld\n", S.hintHit, S.hintMiss, S.removeSkip, S.wpHasFast);
   fprintf(f, "  -- optimizations: waypoint=%ld  ani memo hit=%ld check=%ld bad=%ld (models trusted=%d)  list scans skipped=%ld\n"
              "                    read served=%ld fills=%ld  stringmap fast=%ld rebuilds=%ld  writes buffered=%ld flushes=%ld --\n",
           S.fastWp, S.fastAniHit, S.fastAniCheck, S.fastAniBad,

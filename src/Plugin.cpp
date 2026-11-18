@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <cstdio>
 #include "Sampler.h"
+#include "Common.h"
 
 HOOKSPACE(Gothic_I_Classic, GetGameVersion() == Engine_G1);
 
@@ -26,6 +27,26 @@ static bool  g_session = false;      // inside save/load
 static int   g_depth = 0;            // tree depth (main thread only)
 static long long g_sessionStart = 0;
 static std::string g_sessionName;
+static int  g_sessionKind = 0;       // 1 = load, 2 = save
+
+// ---------------------------------------------------------------- optimization switches (Common.h)
+bool g_optOn[OPT_COUNT] = {};
+const char* const g_optKeys[OPT_COUNT] = { "FastWaypoints", "FastAniInit", "FastWorldLists", "FastFileRead", "FastStringMap", "FastFileWrite" };
+static int g_optMode[OPT_COUNT] = { 1, 1, 1, 1, 1, 1 };
+static int g_abCounter = 0;
+bool IsMainThread() { return GetCurrentThreadId() == g_mainThread; }
+bool InSession() { return g_session; }
+bool InLoadSession() { return g_session && g_sessionKind == 1; }
+bool InSaveSession() { return g_session && g_sessionKind == 2; }
+static std::string ApplyOptModes() {   // resolves A/B (mode 2) for this session
+  bool abOn = (g_abCounter++ % 2) == 1;
+  std::string ab;
+  for (int i = 0; i < OPT_COUNT; i++) {
+    g_optOn[i] = g_optMode[i] == 1 || (g_optMode[i] == 2 && abOn);
+    if (g_optMode[i] == 2) ab = abOn ? "  [Fast*=ON]" : "  [Fast*=OFF]";
+  }
+  return ab;
+}
 
 struct TreeEvent { int depth; std::string name; long long start; long long ticks; int calls; };
 static std::vector<TreeEvent> g_tree;
@@ -103,7 +124,10 @@ static void EnsureConfigured();
 static void SessionBegin(const std::string& name) {
   EnsureConfigured();
   g_session = true; g_depth = 0; g_tree.clear(); g_stack.clear(); AggReset();
-  g_sessionName = name; g_sessionStart = Now();
+  g_sessionKind = name.rfind("SAVE", 0) == 0 ? 2 : 1;
+  g_sessionName = name + ApplyOptModes();
+  Opt_SessionBegin();
+  g_sessionStart = Now();
   if (g_profLevel == 1) { if (Sampler::Active()) Sampler::End("STARTUP"); Sampler::Begin(); }
 }
 
@@ -122,8 +146,10 @@ static void SessionEnd(bool watchFrames) {
       fprintf(f, "\n");
     }
     WriteAggs(f);
+    Opt_WriteStats(f);
     fclose(f);
   }
+  Opt_SessionEnd();
   g_session = false;
   if (g_profLevel == 1) Sampler::End(g_sessionName.c_str());
   if (watchFrames) {
@@ -271,6 +297,7 @@ void __fastcall ProtoDtor_h(zCModelPrototype*, void*);
 auto Hook_ProtoDtor = HOOK(0x0056E240, &ProtoDtor_h);
 void __fastcall ProtoDtor_h(zCModelPrototype* p, void* edx) {
   if (g_keeping) g_keptProtos.erase(p);
+  Opt_PrototypeDestroyed();
   Hook_ProtoDtor(p, edx);
 }
 
@@ -563,6 +590,7 @@ static void EnsureConfigured() {
   g_profLevel = IniInt("Profiler", 1);
   g_profile = g_profLevel != 0;
   IniInt("KeepResources", 1); IniInt("KeepResourcesOnChangeLevel", 0);  // make the keys appear in GOTHIC.INI
+  for (int i = 0; i < OPT_COUNT; i++) { g_optMode[i] = IniInt(g_optKeys[i], 1); g_optOn[i] = g_optMode[i] != 0; }
   if (g_profLevel == 3) InstallHotHooks();
   if (g_profile) if (FILE* f = OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler active (level %d) #####\n", g_profLevel); fclose(f); }
 }
@@ -577,6 +605,11 @@ BOOL WINAPI DllMain(HMODULE, DWORD reason, LPVOID) {
     char exe[MAX_PATH]; GetModuleFileNameA(nullptr, exe, MAX_PATH);
     std::string dir = exe; dir = dir.substr(0, dir.find_last_of("\\/") + 1);
     int level = GetPrivateProfileIntA("ZFASTSAVELOAD", "Profiler", 1, (dir + "GOTHIC.INI").c_str());
+    // optimizations are usable before zoptions exists (e.g. read-ahead while the game starts up)
+    for (int i = 0; i < Gothic_I_Classic::OPT_COUNT; i++) {
+      Gothic_I_Classic::g_optMode[i] = GetPrivateProfileIntA("ZFASTSAVELOAD", Gothic_I_Classic::g_optKeys[i], 1, (dir + "GOTHIC.INI").c_str());
+      Gothic_I_Classic::g_optOn[i] = Gothic_I_Classic::g_optMode[i] != 0;
+    }
     if (level == 1) {
       Sampler::Init((dir + "zFastSaveLoad_prof").c_str());
       Sampler::BeginAsync();

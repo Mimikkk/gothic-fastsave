@@ -36,6 +36,7 @@ static inline const char* ZPtr(const void* z) { const char* p = *(const char* co
 static inline unsigned ZLen(const void* z) { return *(const unsigned*)((const char*)z + 12); }
 
 // ---------------------------------------------------------------- hinted sorted-list insertion
+static bool g_expInstalled = false;   // experimental list hooks installed (FastListHints / FastSkipRemove)
 typedef void(__thiscall* InsSortFn)(void* list, void* elem);
 typedef int(__cdecl* ListCmpFn)(void* a, void* b);
 
@@ -51,7 +52,7 @@ static void HintsReset() { for (auto& h : g_hint) h = Hint{}; }
 static void HintForget(void* data) { for (auto& h : g_hint) if (h.data == data) { h.node = nullptr; h.data = nullptr; } }
 
 void* __fastcall PoolAlloc_h(void*, void*);
-auto Hook_PoolAlloc = HOOK(0x0054F170, &PoolAlloc_h);
+Union::Hook<decltype(&PoolAlloc_h)> Hook_PoolAlloc(nullptr);   // installed only for FastListHints
 void* __fastcall PoolAlloc_h(void* pool, void* edx) {
   void* r = Hook_PoolAlloc(pool, edx);
   if (t_capture && !t_captured) t_captured = r;
@@ -152,47 +153,9 @@ auto Hook_WnDel = HOOK(0x007036A0, &WnDel_h);
 void __fastcall WnDel_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnDel(s, e, a); WpInvalidate(); }
 void __fastcall WnUnarc_h(void*, void*, void*);
 auto Hook_WnUnarc = HOOK(0x00708530, &WnUnarc_h);
-static void* g_wnUnarcNet = nullptr;
-static bool g_wnBuilt = false;
-static std::unordered_set<void*> g_wnMembers;
-void __fastcall WnUnarc_h(void* s, void* e, void* a) {
-  WpInvalidate();
-  g_hint[3] = Hint{};
-  // The member set is built lazily at the first HasWaypoint call (not here): Unarchive may drop the old
-  // waypoints first, and a new waypoint allocated at a freed address must not be seen as present.
-  bool fast = g_optOn[OPT_Waypoints] && IsMainThread();
-  g_wnMembers.clear(); g_wnBuilt = false;
-  if (fast) g_wnUnarcNet = s;
-  Hook_WnUnarc(s, e, a);
-  g_wnUnarcNet = nullptr; g_wnMembers.clear(); g_wnBuilt = false; g_hint[3] = Hint{};
-  WpInvalidate();
-}
+void __fastcall WnUnarc_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnUnarc(s, e, a); WpInvalidate(); }
 
-// zCWayNet::HasWaypoint(zCWaypoint*) (0x00703360): linear walk over wplist
-int __fastcall WnHas_h(void*, void*, void*);
-auto Hook_WnHas = HOOK(0x00703360, &WnHas_h);
-int __fastcall WnHas_h(void* net, void* e, void* wp) {
-  if (net == g_wnUnarcNet && IsMainThread()) {
-    if (!g_wnBuilt) {
-      for (void* n = *(void**)((char*)net + 0x30); n; n = *(void**)((char*)n + 8)) g_wnMembers.insert(*(void**)((char*)n + 4));
-      g_wnBuilt = true;
-    }
-    S.wpHasFast++;
-    return g_wnMembers.count(wp) ? 1 : 0;
-  }
-  return Hook_WnHas(net, e, wp);
-}
 
-// zCListSort<zCWaypoint>::InsertSort (0x0070A400)
-void __fastcall WpInsSort_h(void*, void*, void*);
-auto Hook_WpInsSort = HOOK(0x0070A400, &WpInsSort_h);
-void __fastcall WpInsSort_h(void* l, void* e, void* wp) {
-  // No insertion hint here: the comparator SortWpList has side effects (it copies wp->wpvob's name into
-  // the compared waypoint, and wpvob may still be stale during Unarchive), so only the original sequence
-  // of comparisons is safe. We only keep the member set current.
-  Hook_WpInsSort(l, e, wp);
-  if (g_wnBuilt && g_wnUnarcNet && IsMainThread() && l == (char*)g_wnUnarcNet + 0x28) g_wnMembers.insert(wp);
-}
 void __fastcall WnUnarcOld_h(void*, void*, void*);
 auto Hook_WnUnarcOld = HOOK(0x00707A30, &WnUnarcOld_h);
 void __fastcall WnUnarcOld_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnUnarcOld(s, e, a); WpInvalidate(); }
@@ -301,7 +264,7 @@ static void SetsReset() { for (auto& ls : g_ls) { ls.built = false; ls.s.clear()
 
 void __fastcall InsSortVob_h(void*, void*, void*);
 auto Hook_InsSortVob = HOOK(0x006D8260, &InsSortVob_h);
-static bool HintsActive() { return InLoadSession() && g_optOn[OPT_WorldLists] && IsMainThread(); }
+static bool HintsActive() { return g_expInstalled && InLoadSession() && g_optOn[OPT_ListHints] && IsMainThread(); }
 void __fastcall InsSortVob_h(void* l, void* e, void* v) { if (HintsActive()) HintedInsert((InsSortFn)(void*)Hook_InsSortVob, g_hint[0], l, v); else Hook_InsSortVob(l, e, v); if (IsMainThread() && g_ls[0].built && g_ls[0].list == l) g_ls[0].s.insert(v); }
 void __fastcall InsSortNpc_h(void*, void*, void*);
 auto Hook_InsSortNpc = HOOK(0x006D82F0, &InsSortNpc_h);
@@ -316,7 +279,7 @@ void __fastcall RemoveFromLists_h(void* w, void* vob) {
   // RemoveFromLists = AddRef, unlink from the lists that contain the vob, Release. For a vob in none of
   // the lists that is a no-op; the sets are exact while loading (all inserts go through the hooked
   // InsertSort, bulk removals reset them), so the three list walks can be skipped.
-  if (vob && InLoadSession() && g_optOn[OPT_WorldLists] && IsMainThread() && ((zCObject*)vob)->refCtr > 0) {
+  if (vob && g_expInstalled && InLoadSession() && g_optOn[OPT_SkipRemove] && IsMainThread() && ((zCObject*)vob)->refCtr > 0) {
     ListSet& a = SetFor(*(void**)((char*)w + 0x6268), 0);
     ListSet& b = SetFor(*(void**)((char*)w + 0x626C), 1);
     ListSet& c = SetFor(*(void**)((char*)w + 0x6270), 2);
@@ -329,13 +292,13 @@ void __fastcall RemoveFromLists_h(void* w, void* vob) {
 
 // bulk removals (not through RemoveFromLists): drop sets and hints
 void __fastcall OwDisposeVobs_h(void*, void*);
-auto Hook_OwDisposeVobs = HOOK(0x006D7990, &OwDisposeVobs_h);
+Union::Hook<decltype(&OwDisposeVobs_h)> Hook_OwDisposeVobs(nullptr);   // installed only for the experimental list options
 void __fastcall OwDisposeVobs_h(void* w, void* e) { SetsReset(); HintsReset(); Hook_OwDisposeVobs(w, e); SetsReset(); HintsReset(); }
 void __fastcall OwDisposeWorld_h(void*, void*);
-auto Hook_OwDisposeWorld = HOOK(0x006D7B10, &OwDisposeWorld_h);
+Union::Hook<decltype(&OwDisposeWorld_h)> Hook_OwDisposeWorld(nullptr);
 void __fastcall OwDisposeWorld_h(void* w, void* e) { SetsReset(); HintsReset(); Hook_OwDisposeWorld(w, e); SetsReset(); HintsReset(); }
 void __fastcall OwDtor_h(void*, void*);
-auto Hook_OwDtor = HOOK(0x006D5F30, &OwDtor_h);
+Union::Hook<decltype(&OwDtor_h)> Hook_OwDtor(nullptr);
 void __fastcall OwDtor_h(void* w, void* e) { SetsReset(); HintsReset(); Hook_OwDtor(w, e); }
 
 static bool MemberFast(void* list, int idx, void* vob) {
@@ -666,6 +629,21 @@ void __fastcall BsClose_h(void* arc, void* edx) {
   void* map = *(void**)((char*)arc + 0x98);
   Hook_BsClose(arc, edx);
   if (map && IsMainThread()) g_sm.erase(map);
+}
+
+// Experimental options (FastListHints / FastSkipRemove) need extra hooks; they are only installed when
+// one of them is enabled, so the default configuration does not touch these functions at all.
+void Opt_InstallExperimental() {
+  if (g_expInstalled || !(g_optOn[OPT_ListHints] || g_optOn[OPT_SkipRemove])) return;
+  g_expInstalled = true;
+  auto& space = Union::HookSpace::GetCurrentInstance();
+  auto saved = space.Condition;
+  space.Condition = []() -> bool { return true; };
+  Hook_PoolAlloc = HOOK(0x0054F170, &PoolAlloc_h);
+  Hook_OwDisposeVobs = HOOK(0x006D7990, &OwDisposeVobs_h);
+  Hook_OwDisposeWorld = HOOK(0x006D7B10, &OwDisposeWorld_h);
+  Hook_OwDtor = HOOK(0x006D5F30, &OwDtor_h);
+  space.Condition = saved;
 }
 
 // =====================================================================================================

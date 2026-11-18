@@ -31,8 +31,9 @@ static int  g_sessionKind = 0;       // 1 = load, 2 = save
 
 // ---------------------------------------------------------------- optimization switches (Common.h)
 bool g_optOn[OPT_COUNT] = {};
-const char* const g_optKeys[OPT_COUNT] = { "FastWaypoints", "FastAniInit", "FastWorldLists", "FastFileRead", "FastStringMap", "FastFileWrite" };
-static int g_optMode[OPT_COUNT] = { 1, 1, 1, 1, 1, 1 };
+const char* const g_optKeys[OPT_COUNT] = { "FastWaypoints", "FastAniInit", "FastWorldLists", "FastFileRead", "FastStringMap", "FastFileWrite", "FastListHints", "FastSkipRemove" };
+static int g_optMode[OPT_COUNT] = { 1, 1, 1, 1, 1, 1, 0, 0 };
+static const int g_optDefault[OPT_COUNT] = { 1, 1, 1, 1, 1, 1, 0, 0 };   // experimental ones default off
 static int g_abCounter[3] = {};   // per session kind, so alternating F10/F12 still gives A/B pairs
 bool IsMainThread() { return GetCurrentThreadId() == g_mainThread; }
 bool InSession() { return g_session; }
@@ -590,7 +591,8 @@ static void EnsureConfigured() {
   g_profLevel = IniInt("Profiler", 1);
   g_profile = g_profLevel != 0;
   IniInt("KeepResources", 1); IniInt("KeepResourcesOnChangeLevel", 0);  // make the keys appear in GOTHIC.INI
-  for (int i = 0; i < OPT_COUNT; i++) { g_optMode[i] = IniInt(g_optKeys[i], 1); g_optOn[i] = g_optMode[i] != 0; }
+  for (int i = 0; i < OPT_COUNT; i++) { g_optMode[i] = IniInt(g_optKeys[i], g_optDefault[i]); g_optOn[i] = g_optMode[i] != 0; }
+  Opt_InstallExperimental();
   if (g_profLevel == 3) InstallHotHooks();
   if (g_profile) if (FILE* f = OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler active (level %d) #####\n", g_profLevel); fclose(f); }
 }
@@ -607,7 +609,7 @@ BOOL WINAPI DllMain(HMODULE, DWORD reason, LPVOID) {
     int level = GetPrivateProfileIntA("ZFASTSAVELOAD", "Profiler", 1, (dir + "GOTHIC.INI").c_str());
     // optimizations are usable before zoptions exists (e.g. read-ahead while the game starts up)
     for (int i = 0; i < Gothic_I_Classic::OPT_COUNT; i++) {
-      Gothic_I_Classic::g_optMode[i] = GetPrivateProfileIntA("ZFASTSAVELOAD", Gothic_I_Classic::g_optKeys[i], 1, (dir + "GOTHIC.INI").c_str());
+      Gothic_I_Classic::g_optMode[i] = GetPrivateProfileIntA("ZFASTSAVELOAD", Gothic_I_Classic::g_optKeys[i], Gothic_I_Classic::g_optDefault[i], (dir + "GOTHIC.INI").c_str());
       Gothic_I_Classic::g_optOn[i] = Gothic_I_Classic::g_optMode[i] != 0;
     }
     if (level == 1) {

@@ -1,0 +1,5 @@
+build/
+out/
+.vs/
+*.log
+workshop/Content/System/Autorun/*.dll

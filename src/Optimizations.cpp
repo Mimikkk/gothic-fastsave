@@ -59,6 +59,11 @@ void* __fastcall PoolAlloc_h(void* pool, void* edx) {
 }
 
 static void HintedInsert(InsSortFn orig, Hint& h, void* list, void* elem) {
+  // Only for the oCWorld vob lists, whose comparators are pure address differences (0x006D5EB0 /
+  // 0x006D5EC0 / 0x006D5EE0). A comparator with side effects (e.g. zCWayNet::SortWpList) must see exactly
+  // the original sequence of comparisons.
+  uintptr_t c = *(uintptr_t*)list;
+  if (c != 0x006D5EB0 && c != 0x006D5EC0 && c != 0x006D5EE0) { orig(list, elem); return; }
   if (!h.off && h.list == list && h.node && *(void**)((char*)h.node + 4) == h.data) {
     ListCmpFn cmp = *(ListCmpFn*)list;
     if (cmp(elem, h.data) >= 0) {
@@ -148,18 +153,18 @@ void __fastcall WnDel_h(void* s, void* e, void* a) { WpInvalidate(); Hook_WnDel(
 void __fastcall WnUnarc_h(void*, void*, void*);
 auto Hook_WnUnarc = HOOK(0x00708530, &WnUnarc_h);
 static void* g_wnUnarcNet = nullptr;
+static bool g_wnBuilt = false;
 static std::unordered_set<void*> g_wnMembers;
 void __fastcall WnUnarc_h(void* s, void* e, void* a) {
   WpInvalidate();
   g_hint[3] = Hint{};
+  // The member set is built lazily at the first HasWaypoint call (not here): Unarchive may drop the old
+  // waypoints first, and a new waypoint allocated at a freed address must not be seen as present.
   bool fast = g_optOn[OPT_Waypoints] && IsMainThread();
-  if (fast) {
-    g_wnMembers.clear();
-    for (void* n = *(void**)((char*)s + 0x30); n; n = *(void**)((char*)n + 8)) g_wnMembers.insert(*(void**)((char*)n + 4));
-    g_wnUnarcNet = s;
-  }
+  g_wnMembers.clear(); g_wnBuilt = false;
+  if (fast) g_wnUnarcNet = s;
   Hook_WnUnarc(s, e, a);
-  g_wnUnarcNet = nullptr; g_wnMembers.clear(); g_hint[3] = Hint{};
+  g_wnUnarcNet = nullptr; g_wnMembers.clear(); g_wnBuilt = false; g_hint[3] = Hint{};
   WpInvalidate();
 }
 
@@ -167,7 +172,14 @@ void __fastcall WnUnarc_h(void* s, void* e, void* a) {
 int __fastcall WnHas_h(void*, void*, void*);
 auto Hook_WnHas = HOOK(0x00703360, &WnHas_h);
 int __fastcall WnHas_h(void* net, void* e, void* wp) {
-  if (net == g_wnUnarcNet && IsMainThread()) { S.wpHasFast++; return g_wnMembers.count(wp) ? 1 : 0; }
+  if (net == g_wnUnarcNet && IsMainThread()) {
+    if (!g_wnBuilt) {
+      for (void* n = *(void**)((char*)net + 0x30); n; n = *(void**)((char*)n + 8)) g_wnMembers.insert(*(void**)((char*)n + 4));
+      g_wnBuilt = true;
+    }
+    S.wpHasFast++;
+    return g_wnMembers.count(wp) ? 1 : 0;
+  }
   return Hook_WnHas(net, e, wp);
 }
 
@@ -175,12 +187,11 @@ int __fastcall WnHas_h(void* net, void* e, void* wp) {
 void __fastcall WpInsSort_h(void*, void*, void*);
 auto Hook_WpInsSort = HOOK(0x0070A400, &WpInsSort_h);
 void __fastcall WpInsSort_h(void* l, void* e, void* wp) {
-  if (g_wnUnarcNet && IsMainThread() && l == (char*)g_wnUnarcNet + 0x28) {
-    HintedInsert((InsSortFn)(void*)Hook_WpInsSort, g_hint[3], l, wp);
-    g_wnMembers.insert(wp);
-    return;
-  }
+  // No insertion hint here: the comparator SortWpList has side effects (it copies wp->wpvob's name into
+  // the compared waypoint, and wpvob may still be stale during Unarchive), so only the original sequence
+  // of comparisons is safe. We only keep the member set current.
   Hook_WpInsSort(l, e, wp);
+  if (g_wnBuilt && g_wnUnarcNet && IsMainThread() && l == (char*)g_wnUnarcNet + 0x28) g_wnMembers.insert(wp);
 }
 void __fastcall WnUnarcOld_h(void*, void*, void*);
 auto Hook_WnUnarcOld = HOOK(0x00707A30, &WnUnarcOld_h);

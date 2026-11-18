@@ -659,7 +659,7 @@ void Opt_SessionEnd() {
 }
 
 void Opt_WriteStats(FILE* f) {
-  fprintf(f, "  -- lists: insert hint hit=%ld miss=%ld  removals skipped=%ld  HasWaypoint fast=%ld\n", S.hintHit, S.hintMiss, S.removeSkip, S.wpHasFast);
+  fprintf(f, "  -- lists (experimental): insert hint hit=%ld miss=%ld  removals skipped=%ld\n", S.hintHit, S.hintMiss, S.removeSkip);
   fprintf(f, "  -- optimizations: waypoint=%ld  ani memo hit=%ld check=%ld bad=%ld (models trusted=%d)  list scans skipped=%ld\n"
              "                    read served=%ld fills=%ld  stringmap fast=%ld rebuilds=%ld  writes buffered=%ld flushes=%ld --\n",
           S.fastWp, S.fastAniHit, S.fastAniCheck, S.fastAniBad,

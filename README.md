@@ -40,23 +40,33 @@ Zabezpieczenie: jeśli silnik usunie obiekt z pominięciem `Release()`, hook na 
 
 ## Konfiguracja
 
-Plik `System\zFastSaveLoad.ini`, czytany przy każdym wczytaniu, więc zmiany działają bez restartu gry:
+Ustawienia są w `System\GOTHIC.INI`, w sekcji `[ZFASTSAVELOAD]`. Klucze pojawiają się tam same po pierwszym uruchomieniu gry. Edytuj je przy **wyłączonej** grze, bo Gothic przy wyjściu nadpisuje `GOTHIC.INI`. Osobnego pliku `.ini` nie ma, bo launcher Workshopu nadpisuje pliki moda przy każdym starcie.
 
 ```ini
-[FASTSAVELOAD]
-; 0 = wyłączone, 1 = włączone, 2 = A/B (na zmianę OFF/ON, do pomiarów)
-KeepResources=2
+[ZFASTSAVELOAD]
+; 0 = wyłączone, 1 = włączone (domyślnie), 2 = A/B (na zmianę OFF/ON, do pomiarów)
+KeepResources=1
 ; To samo przy zmianie poziomu. Zwiększa chwilowe zużycie RAM.
 KeepResourcesOnChangeLevel=0
-; 1 = raport do SystemzFastSaveLoad.log, 0 = profiler wyłączony (mniejszy narzut; czytane przy starcie gry)
+; 1 = raport do System\zFastSaveLoad.log, 0 = profiler wyłączony (mniejszy narzut)
 Profiler=1
 ```
+
+## Wyniki pomiarów (Edition Final, Steam)
+
+| Operacja | Czas |
+|---|---|
+| Zapis | 0,65–0,8 s (z tego `zCWorld::SaveWorld` 0,6–0,78 s) |
+| Wczytanie w trakcie gry, KeepResources=0 | 1,76–1,81 s |
+| Wczytanie w trakcie gry, KeepResources=1 | 1,55–1,66 s |
+| Pierwsze wczytanie z menu | 3,1–3,5 s (z tego teren `WORLD.ZEN` ~1,4 s) |
+
+Największy koszt przy wczytaniu to odtwarzanie ~920 NPC (`oCNpc::Unarchive`, 0,7–0,9 s). Statyczny świat jest ponownie wczytywany tylko przy pierwszym wczytaniu z menu: silnik zachowuje go przy wczytywaniu zapisu z tej samej lokacji.
 
 ## Instalacja
 
 Skopiuj:
 - `zFastSaveLoad.dll` do `Gothic\System\Autorun\`
-- `zFastSaveLoad.ini` do `Gothic\System\`
 
 Wymagany jest Union (np. z Workshopu). Plik VDF nie jest potrzebny.
 
@@ -82,8 +92,9 @@ Wynik: `build\zFastSaveLoad.dll`. DLL jest linkowany statycznie (union-api jako 
 
 ## Plany
 
-- [ ] Zebrać pomiary z prawdziwej gry i potwierdzić, która faza dominuje.
-- [ ] Pomijanie ponownego ładowania statycznego świata (`LoadWorldStat`), gdy zapis jest z tej samej lokacji.
+- [x] Zebrać pomiary z prawdziwej gry i potwierdzić, która faza dominuje.
+- [ ] Buforowanie odczytu `WORLD.ZEN` (17 mln odczytów po ~6 B przy pierwszym wczytaniu).
+- [ ] Analiza kosztu `oCNpc::Unarchive`.
 - [ ] Przyspieszenie zapisu (do ustalenia po pomiarach: archiwizacja świata, kopiowanie slotu, miniatura).
 
 ## Zależności

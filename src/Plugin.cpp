@@ -96,7 +96,9 @@ static void WriteAggs(FILE* f) {
   }
 }
 
+static void EnsureConfigured();
 static void SessionBegin(const std::string& name) {
+  EnsureConfigured();
   g_session = true; g_depth = 0; g_tree.clear(); g_stack.clear(); AggReset();
   g_sessionName = name; g_sessionStart = Now();
 }
@@ -169,8 +171,13 @@ struct zStrByVal { char raw[sizeof(zSTRING)]; };  // pass-through of a by-value 
 #define HOOK(addr, name, ...) Union::CreateHook(reinterpret_cast<void*>(addr), name, Union::HookType::Hook_Detours)
 
 // ================================================================ config
-static std::string IniPath() { std::string p = LogPath(); return p.substr(0, p.size() - 4) + ".ini"; }
-static int IniInt(const char* key, int def) { return GetPrivateProfileIntA("FASTSAVELOAD", key, def, IniPath().c_str()); }
+// Settings live in GOTHIC.INI, section [ZFASTSAVELOAD]. The Workshop launcher overwrites files shipped with
+// the mod on every start, so a separate .ini would lose the user's changes. zCOption::ReadInt also adds
+// missing keys with their defaults, so they show up in GOTHIC.INI after the first run.
+static int IniInt(const char* key, int def) {
+  if (!zoptions) return def;
+  return zoptions->ReadInt(zSTRING("ZFASTSAVELOAD"), key, def);
+}
 
 // ================================================================ O1: keep resources alive across a load
 // While the old world is disposed, every texture / mesh / model prototype whose refcount drops to 0
@@ -263,7 +270,7 @@ void __fastcall ProtoDtor_h(zCModelPrototype* p, void* edx) {
 }
 
 static bool ShouldKeep(bool changeLevel) {
-  int mode = IniInt(changeLevel ? "KeepResourcesOnChangeLevel" : "KeepResources", changeLevel ? 0 : 2);
+  int mode = IniInt(changeLevel ? "KeepResourcesOnChangeLevel" : "KeepResources", changeLevel ? 0 : 1);
   if (mode == 2) return (g_loadCounter++ % 2) == 1;  // A/B: off, on, off, on...
   return mode == 1;
 }
@@ -482,6 +489,7 @@ void __fastcall Render_h(void*, void*);
 auto Hook_Render = HOOK(0x0063DBE0, &Render_h);
 void __fastcall Render_h(void* self, void* edx) {
   if (!g_mainThread) g_mainThread = GetCurrentThreadId();
+  EnsureConfigured();
   if (g_watchFrames <= 0 || g_session) { Hook_Render(self, edx); return; }
   long long t0 = Now();
   Hook_Render(self, edx);
@@ -508,15 +516,22 @@ static void DisableProfilerHooks() {
   Hook_zDisposeVobs.Disable(); Hook_zWorldUnarchive.Disable();
 }
 
+static void EnsureConfigured() {
+  static bool configured = false;
+  if (configured || !zoptions) return;
+  configured = true;
+  g_profile = IniInt("Profiler", 1) != 0;
+  IniInt("KeepResources", 1); IniInt("KeepResourcesOnChangeLevel", 0);  // make the keys appear in GOTHIC.INI
+  if (!g_profile) DisableProfilerHooks();
+  else if (FILE* f = OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler active #####\n"); fclose(f); }
+}
+
 } // namespace Gothic_I_Classic
 
 BOOL WINAPI DllMain(HMODULE, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     if (GetGameVersion() != Engine_G1) return FALSE;
     Gothic_I_Classic::g_mainThread = GetCurrentThreadId();
-    Gothic_I_Classic::g_profile = Gothic_I_Classic::IniInt("Profiler", 1) != 0;
-    if (!Gothic_I_Classic::g_profile) Gothic_I_Classic::DisableProfilerHooks();
-    if (FILE* f = Gothic_I_Classic::OpenLog()) { fprintf(f, "\n##### zFastSaveLoad profiler loaded #####\n"); fclose(f); }
   }
   return TRUE;
 }
